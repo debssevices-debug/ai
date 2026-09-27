@@ -52,6 +52,10 @@ from livekit.agents import RunContext
 from livekit.agents.llm import ToolError, Toolset, function_tool
 from livekit.agents.llm.chat_context import FunctionCallOutput, ImageContent
 
+# Page-derived text is wrapped before it reaches the model: page content is data
+# to report on, never instructions to obey. Shared with every other tool.
+from nec_ai.security.untrusted import wrap_untrusted
+
 logger = logging.getLogger("nec.browser")
 
 
@@ -348,11 +352,6 @@ LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"}
 #: does, so an unrecognised name cannot reach the keyboard at all.
 SUBMIT_KEYS = frozenset({"enter", "return"})
 
-#: Wraps every piece of page-derived text before it reaches the model. Page
-#: content is data to report on, never instructions to obey.
-UNTRUSTED_PREFIX = "<page_data>"
-UNTRUSTED_SUFFIX = "</page_data>"
-
 
 class ActionRisk(StrEnum):
     """How much a tool call commits to. Derived from the call's structure."""
@@ -543,11 +542,6 @@ def confirmation_refusal(action: str) -> str:
         "they say yes, call the tool again with confirmed=True. Do not "
         "report it as done, and do not retry without asking."
     )
-
-
-def wrap_untrusted(text: str) -> str:
-    """Mark text that came from the open web as data, not instructions."""
-    return f"{UNTRUSTED_PREFIX}\n{text}\n{UNTRUSTED_SUFFIX}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
