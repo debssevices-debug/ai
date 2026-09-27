@@ -194,9 +194,7 @@ class ToolRegistry:
             result = await asyncio.wait_for(tool.run(args, ctx), timeout=timeout)
         except TimeoutError:
             logger.warning("TOOL %s timed out after %gs", name, timeout)
-            result = ToolResult.failure(
-                f"{name} timed out after {timeout:g} seconds."
-            )
+            result = ToolResult.failure(f"{name} timed out after {timeout:g} seconds.")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
