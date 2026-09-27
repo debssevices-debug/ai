@@ -28,6 +28,17 @@ def create_llm(settings: Settings) -> LLMProvider:
             settings.google_api_key.get_secret_value(), settings.llm_model
         )
 
+    if settings.llm_provider == "claude":
+        if settings.anthropic_api_key is None:
+            raise LLMError("ANTHROPIC_API_KEY is not set. Add it to your .env file.")
+        from nec_ai.llm.claude import ClaudeProvider
+
+        return ClaudeProvider(
+            settings.anthropic_api_key.get_secret_value(),
+            settings.llm_model,
+            fallbacks=settings.claude_fallbacks,
+        )
+
     if settings.llm_provider == "openai":
         if settings.openai_api_key is None:
             raise LLMError("OPENAI_API_KEY is not set. Add it to your .env file.")

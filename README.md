@@ -65,6 +65,8 @@ nec_ai/
 ├── llm/
 │   ├── base.py        interface LLMProvider, Message, ToolCall, retries
 │   ├── gemini.py      Google Gemini (défaut)
+│   ├── claude.py      Anthropic Claude
+│   ├── ollama.py      modèle local, sans clé
 │   ├── openai.py      OpenAI ou tout endpoint compatible
 │   ├── fake.py        LLM scripté pour les tests
 │   └── prompts.py     prompt système en blocs (texte / voix)
@@ -136,9 +138,10 @@ Seule une clé LLM est obligatoire. Tout le reste a une valeur par défaut sûre
 
 | Variable | Rôle | Défaut |
 |---|---|---|
-| `LLM_PROVIDER` | `gemini`, `openai` ou `ollama` (local, sans clé) | `gemini` |
-| `LLM_MODEL` | modèle précis (vide = défaut du fournisseur) | `gemini-flash-latest` / `gpt-4.1-mini` |
+| `LLM_PROVIDER` | `gemini`, `claude`, `openai` ou `ollama` (local, sans clé) | `gemini` |
+| `LLM_MODEL` | modèle précis (vide = défaut du fournisseur) | `gemini-flash-latest` / `claude-opus-5` / `gpt-4.1-mini` / `qwen3:8b` |
 | `GOOGLE_API_KEY` | clé Gemini ([aistudio.google.com](https://aistudio.google.com/apikey)) | — |
+| `ANTHROPIC_API_KEY` | clé Claude ([console.anthropic.com](https://console.anthropic.com)) | — |
 | `OPENAI_API_KEY` | clé OpenAI | — |
 | `MAX_AGENT_ITERATIONS` | étapes maximum par demande | `20` |
 | `LLM_REQUESTS_PER_MINUTE` | rythme max des appels au LLM (5 pour l'offre gratuite Gemini) | `0` (illimité) |

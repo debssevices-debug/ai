@@ -33,11 +33,16 @@ class Settings(BaseSettings):
     )
 
     # ── LLM ──────────────────────────────────────────────────────────────
-    llm_provider: Literal["gemini", "openai", "ollama"] = "gemini"
+    llm_provider: Literal["gemini", "claude", "openai", "ollama"] = "gemini"
     llm_model: str = ""
     """Empty means the provider's default model."""
 
     google_api_key: SecretStr | None = None
+    anthropic_api_key: SecretStr | None = None
+    claude_fallbacks: bool = True
+    """Let the API re-run a request that Claude's safety filter declines on its
+    recommended fallback model (server-side, same call)."""
+
     openai_api_key: SecretStr | None = None
     openai_base_url: str | None = None
     """Any OpenAI-compatible endpoint (OpenRouter, a local server, ...)."""

@@ -373,3 +373,157 @@ def test_ollama_is_built_without_any_key() -> None:
     llm = create_llm(Settings(_env_file=None, llm_provider="ollama"))
     assert llm.name == "ollama"
     assert llm.model == "qwen3:8b"
+
+
+# ── Claude (Anthropic) ───────────────────────────────────────────────────────
+
+
+class _Recorder:
+    def __init__(self, response=None, error=None):
+        self.response, self.error, self.kwargs = response, error, None
+
+    async def create(self, **kwargs):
+        self.kwargs = kwargs
+        if self.error:
+            raise self.error
+        return self.response
+
+
+def _claude(response=None, error=None):
+    from nec_ai.llm.claude import ClaudeProvider
+
+    recorder = _Recorder(response, error)
+    client = SimpleNamespace(beta=SimpleNamespace(messages=recorder))
+    return ClaudeProvider("key", client=client), recorder
+
+
+def _claude_message(content, stop_reason="end_turn"):
+    from anthropic.types.beta import BetaMessage
+
+    return BetaMessage.model_validate(
+        {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5",
+            "content": content,
+            "stop_reason": stop_reason,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+    )
+
+
+async def test_claude_request_shape_and_tool_call_parsing() -> None:
+    response = _claude_message(
+        [
+            {"type": "thinking", "thinking": "", "signature": "sig"},
+            {"type": "text", "text": "Je cherche."},
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "web_search",
+                "input": {"query": "q"},
+            },
+        ],
+        stop_reason="tool_use",
+    )
+    llm, recorder = _claude(response)
+    result = await llm.complete(_conversation(), [SPEC], temperature=0.3)
+
+    sent = recorder.kwargs
+    assert sent["model"] == "claude-opus-5"
+    assert sent["thinking"] == {"type": "adaptive"}
+    assert sent["fallbacks"] == "default"
+    assert sent["betas"] == ["server-side-fallback-2026-07-01"]
+    assert "temperature" not in sent
+    assert sent["system"] == "Tu es NEC."
+    assert sent["tools"][0]["input_schema"] == SPEC.parameters
+    # Both tool results of the turn travel in one user message.
+    last = sent["messages"][-1]
+    assert last["role"] == "user"
+    assert [b["tool_use_id"] for b in last["content"]] == ["c1", "c2"]
+
+    assert result.text == "Je cherche."
+    assert result.tool_calls[0].id == "toolu_1"
+    assert result.tool_calls[0].arguments == {"query": "q"}
+    # Thinking is kept so it can be echoed back unchanged next turn.
+    assert result.provider_data[0]["type"] == "thinking"
+    assert result.provider_data[0]["signature"] == "sig"
+
+
+def test_claude_echoes_its_own_blocks_and_merges_notes() -> None:
+    from nec_ai.llm.claude import to_claude_messages
+
+    blocks = [
+        {"type": "thinking", "thinking": "", "signature": "s"},
+        {"type": "tool_use", "id": "toolu_1", "name": "web_search", "input": {}},
+    ]
+    call = ToolCall("web_search", {}, id="toolu_1")
+    msgs = [
+        Message.user("x"),
+        Message(
+            "assistant", "", tool_calls=[call], provider_data=blocks, provider="claude"
+        ),
+        Message.tool_result(call, "ERROR: down"),
+        Message.user("(note automatique)"),
+    ]
+    _, out = to_claude_messages(msgs)
+    assert out[1] == {"role": "assistant", "content": blocks}
+    assert out[2]["content"][0]["is_error"] is True
+    assert out[2]["content"][1] == {"type": "text", "text": "(note automatique)"}
+    assert len(out) == 3
+
+
+async def test_claude_refusal_is_a_clear_error() -> None:
+    llm, _ = _claude(_claude_message([], stop_reason="refusal"))
+    with pytest.raises(LLMError, match="refusé"):
+        await llm.complete([Message.user("hi")])
+
+
+def _api_error(cls, status, headers=None):
+    import httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(status, headers=headers or {}, request=request)
+    return cls("boom", response=response, body=None)
+
+
+async def test_claude_rate_limit_carries_retry_after() -> None:
+    import anthropic
+
+    llm, _ = _claude(
+        error=_api_error(anthropic.RateLimitError, 429, {"retry-after": "12"})
+    )
+    with pytest.raises(LLMUnavailableError) as info:
+        await llm.complete([Message.user("hi")])
+    assert info.value.kind == "rate_limit"
+    assert info.value.retry_after == 12
+
+
+async def test_claude_overloaded_is_retryable() -> None:
+    import anthropic
+
+    llm, _ = _claude(error=_api_error(anthropic.InternalServerError, 529))
+    with pytest.raises(LLMUnavailableError) as info:
+        await llm.complete([Message.user("hi")])
+    assert info.value.kind == "overloaded"
+
+
+async def test_claude_bad_key_is_explained() -> None:
+    import anthropic
+
+    llm, _ = _claude(error=_api_error(anthropic.AuthenticationError, 401))
+    with pytest.raises(LLMError, match="ANTHROPIC_API_KEY") as info:
+        await llm.complete([Message.user("hi")])
+    assert not isinstance(info.value, LLMUnavailableError)
+
+
+def test_claude_is_built_from_settings() -> None:
+    with pytest.raises(LLMError, match="ANTHROPIC_API_KEY"):
+        create_llm(Settings(_env_file=None, llm_provider="claude"))
+    llm = create_llm(
+        Settings(_env_file=None, llm_provider="claude", anthropic_api_key="k")
+    )
+    assert llm.name == "claude"
+    assert llm.model == "claude-opus-5"
