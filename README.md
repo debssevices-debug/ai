@@ -193,12 +193,12 @@ from nec_ai.tools.base import PermissionDecision, Tool, ToolContext, ToolResult
 class WeatherTool(Tool):
     name = "weather"
     description = "Donner la météo actuelle d'une ville."
-    untrusted_output = True          # la sortie vient d'Internet
+    untrusted_output = True  # la sortie vient d'Internet
 
-    class Input(BaseModel):          # sert à la fois de schéma pour le LLM et de validation
+    class Input(BaseModel):  # sert à la fois de schéma pour le LLM et de validation
         city: str = Field(..., description="Nom de la ville")
 
-    def check_permission(self, args, ctx):   # optionnel : SAFE par défaut
+    def check_permission(self, args, ctx):  # optionnel : SAFE par défaut
         return PermissionDecision.safe()
 
     async def run(self, args: Input, ctx: ToolContext) -> ToolResult:
