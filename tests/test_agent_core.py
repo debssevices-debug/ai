@@ -240,6 +240,7 @@ async def test_a_permanent_llm_error_is_not_retried() -> None:
     events = await collect(make_agent(llm, llm_max_retries=3), "x")
     assert len(llm.calls) == 1
     assert events[-1].data["failed"] is True
+    assert "configuration" in events[-1].data["answer"]
 
 
 @pytest.mark.parametrize("request_text", ["", "   "])

@@ -34,6 +34,7 @@ from nec_ai.config.settings import Settings
 from nec_ai.llm.base import (
     LLMError,
     LLMProvider,
+    LLMUnavailableError,
     Message,
     ToolCall,
     complete_with_retry,
@@ -59,6 +60,22 @@ FALLBACK_ANSWER = (
     "Je n'ai pas pu terminer cette demande : le modèle de langage est indisponible "
     "pour le moment. Réessaie dans un instant."
 )
+
+INTERNAL_ERROR_ANSWER = (
+    "Une erreur interne m'a empêché de terminer cette demande. Elle a été "
+    "enregistrée dans les journaux."
+)
+
+
+def llm_failure_answer(exc: Exception) -> str:
+    """What the user reads when the LLM fails: retry later, or fix the config."""
+    if isinstance(exc, LLMUnavailableError):
+        return FALLBACK_ANSWER
+    return (
+        "Je n'ai pas pu traiter cette demande : le modèle de langage a renvoyé une "
+        f"erreur ({exc}). Vérifie la configuration (clé API, nom du modèle)."
+    )
+
 
 EventSink = Callable[[AgentEvent], None]
 
@@ -107,7 +124,7 @@ class Agent:
             except Exception as exc:  # last line of defence
                 logger.exception("AGENT crashed")
                 emit(EventType.ERROR, error=f"{type(exc).__name__}: {exc}", fatal=True)
-                emit(EventType.FINAL, answer=FALLBACK_ANSWER, failed=True)
+                emit(EventType.FINAL, answer=INTERNAL_ERROR_ANSWER, failed=True)
             finally:
                 queue.put_nowait(None)
 
@@ -185,7 +202,7 @@ class Agent:
                 emit(EventType.ERROR, error=str(exc), stage="llm")
                 emit(
                     EventType.FINAL,
-                    answer=FALLBACK_ANSWER,
+                    answer=llm_failure_answer(exc),
                     failed=True,
                     iterations=iteration,
                 )
@@ -225,7 +242,7 @@ class Agent:
             answer = response.text or FALLBACK_ANSWER
         except LLMError as exc:
             emit(EventType.ERROR, error=str(exc), stage="llm")
-            answer = FALLBACK_ANSWER
+            answer = llm_failure_answer(exc)
         self._finish(
             session_id,
             request,

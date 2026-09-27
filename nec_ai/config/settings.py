@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     fetch_timeout: float = 15.0
     fetch_max_bytes: int = 3 * 1024 * 1024
     fetch_max_chars: int = 8_000
+    fetch_allow_private: bool = False
+    """Allow fetching private/loopback addresses. Local testing only (SSRF risk)."""
 
     # ── Filesystem / terminal ───────────────────────────────────────────
     filesystem_roots: CsvList = Field(default_factory=list)
