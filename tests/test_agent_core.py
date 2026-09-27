@@ -310,3 +310,42 @@ async def test_calls_from_one_turn_run_concurrently() -> None:
     assert peak == 3
     tool_messages = [m for m in llm.calls[-1].messages if m.role == "tool"]
     assert [m.content for m in tool_messages] == ["page a", "page b", "page c"]
+
+
+async def test_a_checkpoint_nudges_a_long_task_to_answer() -> None:
+    queries = iter(range(100))
+
+    def search(messages):
+        return call("web_search", query=f"q{next(queries)}")
+
+    def answer(messages):
+        assert "déjà fait 2 étapes" in messages[-1].content
+        return LLMResponse(text="Voici ce que j'ai.")
+
+    llm = FakeLLM([search, search, answer])
+    events = await collect(make_agent(llm, agent_checkpoint_step=3), "x")
+    assert events[-1].data["answer"] == "Voici ce que j'ai."
+
+
+async def test_links_found_before_an_llm_failure_are_kept() -> None:
+    class ResultSearch(FakeSearch):
+        async def run(self, args, ctx):
+            return ToolResult.success(
+                "1. Maison Kraainem",
+                data={
+                    "results": [
+                        {"title": "Maison Kraainem", "url": "https://immo.be/1"}
+                    ]
+                },
+            )
+
+    llm = FakeLLM(
+        [
+            call("web_search", query="maison"),
+            LLMUnavailableError("quota", kind="rate_limit"),
+        ]
+    )
+    events = await collect(make_agent(llm, ResultSearch()), "x")
+    answer = events[-1].data["answer"]
+    assert "quota" in answer
+    assert "Maison Kraainem : https://immo.be/1" in answer

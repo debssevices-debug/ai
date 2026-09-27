@@ -173,8 +173,9 @@ def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-    # The terminal shows the agent's progress lines; -v adds the timestamped logs.
-    setup_logging("INFO" if args.verbose else "WARNING")
+    # The progress lines already show waits and errors; the timestamped logs
+    # would repeat them, so they only appear with -v.
+    setup_logging("INFO" if args.verbose else "CRITICAL")
     printer = EventPrinter(verbose=args.verbose, plain=args.plain)
 
     try:

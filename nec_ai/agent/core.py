@@ -58,6 +58,13 @@ LIMIT_NOTICE = (
     "manque ou reste à vérifier."
 )
 
+CHECKPOINT_NOTICE = (
+    "(Note automatique : tu as déjà fait {step} étapes pour cette demande. Si tes "
+    "dernières recherches n'apportent plus rien de nouveau, arrête et réponds "
+    "maintenant avec ce que tu as trouvé, ce qui manque et les liens utiles. "
+    "Continue seulement si une piste précise et différente reste à explorer.)"
+)
+
 FALLBACK_ANSWER = (
     "Je n'ai pas pu terminer cette demande : le modèle de langage est indisponible "
     "pour le moment. Réessaie dans un instant."
@@ -90,6 +97,14 @@ def llm_failure_answer(exc: Exception) -> str:
         "Je n'ai pas pu traiter cette demande : le modèle de langage a renvoyé une "
         f"erreur ({exc}). Vérifie la configuration (clé API, nom du modèle)."
     )
+
+
+def with_sources(answer: str, task: TaskContext) -> str:
+    """When the model fails mid-task, still hand over the links already found."""
+    digest = task.sources_digest()
+    if not digest:
+        return answer
+    return f"{answer}\n\nVoici les liens trouvés avant l'interruption :\n{digest}"
 
 
 EventSink = Callable[[AgentEvent], None]
@@ -202,6 +217,12 @@ class Agent:
 
         for iteration in range(1, self.settings.max_agent_iterations + 1):
             task.iterations = iteration
+            if iteration == self.settings.agent_checkpoint_step:
+                # A long task gets one explicit checkpoint, so the model weighs
+                # "answer now" against "keep searching" instead of drifting.
+                messages.append(
+                    Message.user(CHECKPOINT_NOTICE.format(step=iteration - 1))
+                )
             emit(EventType.THINKING, iteration=iteration)
             logger.info("AGENT reasoning (step %d)", iteration)
 
@@ -212,7 +233,7 @@ class Agent:
                 emit(EventType.ERROR, error=str(exc), stage="llm")
                 emit(
                     EventType.FINAL,
-                    answer=llm_failure_answer(exc),
+                    answer=with_sources(llm_failure_answer(exc), task),
                     failed=True,
                     iterations=iteration,
                 )
@@ -254,7 +275,7 @@ class Agent:
             answer = response.text or FALLBACK_ANSWER
         except LLMError as exc:
             emit(EventType.ERROR, error=str(exc), stage="llm")
-            answer = llm_failure_answer(exc)
+            answer = with_sources(llm_failure_answer(exc), task)
         self._finish(
             session_id,
             request,
@@ -336,6 +357,8 @@ class Agent:
         tools_used.append(call.name)
         if ctx.task is not None:
             ctx.task.record(call.name, call.arguments, result.ok, result.content)
+            if result.ok:
+                ctx.task.add_sources(result.data)
 
         if call.name == PLAN_TOOL and result.ok and isinstance(result.data, dict):
             emit(EventType.PLAN, **result.data)

@@ -53,6 +53,9 @@ class Settings(BaseSettings):
 
     # ── Agent ────────────────────────────────────────────────────────────
     max_agent_iterations: int = Field(default=20, ge=1, le=100)
+    agent_checkpoint_step: int = 7
+    """At this step the agent is reminded to answer if it is not progressing.
+    0 disables it."""
     tool_timeout: float = 60.0
     max_tool_output_chars: int = 12_000
     """Tool output longer than this is truncated before it reaches the LLM."""
