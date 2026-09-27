@@ -108,18 +108,34 @@ class Settings(BaseSettings):
     """Accepted bearer tokens. Empty disables the API unless API_ALLOW_NO_AUTH."""
 
     api_allow_no_auth: bool = False
+    """Only honoured when the server listens on localhost."""
+
     rate_limit_per_minute: int = 30
+    """Requests per minute and per API key (chat and confirmations)."""
+
+    api_max_concurrent_runs: int = 4
+    """Agent runs executing at the same time, across all clients."""
+
+    api_cors_origins: CsvList = Field(default_factory=list)
+    """Browser origins allowed to call the API (none by default)."""
+
+    max_request_chars: int = 8_000
+
     server_url: str = "http://127.0.0.1:8000"
-    """Where a client (Windows app, CLI --remote) reaches the API."""
+    """Where a client (Windows app, `nec remote`) reaches the API."""
+
+    nec_api_key: SecretStr | None = None
+    """Client side: the key `nec remote` sends to SERVER_URL."""
 
     confirmation_timeout: float = 120.0
+    """Seconds a remote client has to approve a risky action before it is refused."""
 
     # ── Logging / tracing ────────────────────────────────────────────────
     log_level: str = "INFO"
     trace_enabled: bool = True
     """Write one JSONL trace per request under ``data_dir/traces``."""
 
-    @field_validator("filesystem_roots", "api_keys", mode="before")
+    @field_validator("filesystem_roots", "api_keys", "api_cors_origins", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
         if isinstance(value, str):

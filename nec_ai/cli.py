@@ -149,6 +149,96 @@ async def _chat(printer: EventPrinter) -> int:
         print(f"\nNEC > {answer}\n")
 
 
+async def _remote(printer: EventPrinter, server: str | None, key: str | None) -> int:
+    """Chat with a NEC server (e.g. on a VPS) instead of a local agent."""
+    from nec_ai.client import RemoteClient, RemoteError
+
+    settings = get_settings()
+    url = server or settings.server_url
+    api_key = key or (
+        settings.nec_api_key.get_secret_value() if settings.nec_api_key else None
+    )
+    async with RemoteClient(url, api_key) as client:
+        try:
+            info = await client.health()
+        except RemoteError as exc:
+            print(f"❌ {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"NEC AI — connecté à {url} (v{info.get('version', '?')}). 'exit' pour quitter.\n"
+        )
+        while True:
+            try:
+                text = await asyncio.to_thread(input, "Vous > ")
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return 0
+            if text.strip().lower() in EXIT_WORDS:
+                return 0
+            if not text.strip():
+                continue
+            answer = ""
+            try:
+                async for event in client.stream(text, session_id="cli"):
+                    printer(event)
+                    if event.type is EventType.CONFIRMATION_REQUIRED:
+                        request = ConfirmationRequest(
+                            tool=event.data.get("tool", ""),
+                            arguments=event.data.get("arguments") or {},
+                            reason=event.data.get("reason", ""),
+                            summary=event.data.get("summary", ""),
+                            id=event.data.get("id", ""),
+                        )
+                        approved = await ask_confirmation(request)
+                        await client.confirm(request.id, approve=approved)
+                    elif event.type is EventType.FINAL:
+                        answer = event.data.get("answer", "")
+            except RemoteError as exc:
+                print(f"❌ {exc}")
+                continue
+            print(f"\nNEC > {answer}\n")
+
+
+def _serve(host: str | None, port: int | None) -> int:
+    import uvicorn
+
+    from nec_ai.api.security import auth_problem
+    from nec_ai.api.server import create_app
+
+    settings = get_settings()
+    if host:
+        settings = settings.model_copy(update={"api_host": host})
+    if port:
+        settings = settings.model_copy(update={"api_port": port})
+    problem = auth_problem(settings)
+    if problem:
+        print(f"Le serveur ne démarre pas : {problem}", file=sys.stderr)
+        return 2
+    setup_logging(settings.log_level)
+    print(f"NEC API sur http://{settings.api_host}:{settings.api_port}")
+    uvicorn.run(
+        create_app(settings),
+        host=settings.api_host,
+        port=settings.api_port,
+        log_level="warning",
+        proxy_headers=True,
+    )
+    return 0
+
+
+def _new_key() -> int:
+    import secrets
+
+    key = secrets.token_urlsafe(32)
+    print(key)
+    print(
+        "\nServeur : ajoute-la à API_KEYS dans son .env."
+        "\nClient  : mets-la dans NEC_API_KEY. Ne la partage pas.",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _tools() -> int:
     from nec_ai.app import build_registry
 
@@ -168,6 +258,13 @@ def main(argv: list[str] | None = None) -> int:
     ask = sub.add_parser("ask", help="poser une seule question")
     ask.add_argument("question", nargs="+")
     sub.add_parser("tools", help="lister les outils disponibles")
+    serve = sub.add_parser("serve", help="lancer l'API serveur")
+    serve.add_argument("--host", help="adresse d'écoute (défaut : API_HOST)")
+    serve.add_argument("--port", type=int, help="port (défaut : API_PORT)")
+    remote = sub.add_parser("remote", help="discuter avec un serveur NEC distant")
+    remote.add_argument("--server", help="URL du serveur (défaut : SERVER_URL)")
+    remote.add_argument("--key", help="clé API (défaut : NEC_API_KEY)")
+    sub.add_parser("new-key", help="générer une clé API solide")
     args = parser.parse_args(argv)
 
     if hasattr(sys.stdout, "reconfigure"):
@@ -181,6 +278,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "tools":
             return _tools()
+        if args.command == "new-key":
+            return _new_key()
+        if args.command == "serve":
+            return _serve(args.host, args.port)
+        if args.command == "remote":
+            return asyncio.run(_remote(printer, args.server, args.key))
         if args.command == "ask":
             return asyncio.run(_ask(" ".join(args.question), printer))
         return asyncio.run(_chat(printer))

@@ -40,11 +40,11 @@ NEC > | Solution | Prix / agent | Points forts | ... |
 |---|---|---|
 | 0 | Restructuration (package `nec_ai/`), nettoyage | ✅ |
 | 1 | Configuration `.env`, logs, système d'outils + permissions | ✅ |
-| 2 | Couche LLM : Gemini, OpenAI, faux LLM de test | ✅ |
+| 2 | Couche LLM : Gemini, Claude (clé ou abonnement via Claude Code), OpenAI, Ollama (local), faux LLM de test | ✅ |
 | 3 | Boucle d'agent, planification, événements, traces, mémoire courte | ✅ |
 | 4 | Recherche web multi-fournisseurs, lecture de pages, CLI → **MVP texte** | ✅ |
 | 5 | Planification avancée | ✅ (outil `update_plan`, livré avec l'étape 3) |
-| 6 | API REST FastAPI + streaming + authentification + rate limiting | ⏳ |
+| 6 | API REST FastAPI + streaming + authentification + rate limiting, client `nec remote`, guide VPS | ✅ |
 | 7 | Outils fichiers et terminal sécurisés | ⏳ |
 | 8 | Navigateur branché sur le nouveau cœur | ⏳ |
 | 9 | Mémoire long terme | ⏳ |
@@ -87,6 +87,11 @@ nec_ai/
 │   └── trace.py       une trace JSONL par requête
 ├── voice/
 │   └── livekit_agent.py  agent vocal LiveKit (d'origine)
+├── api/
+│   ├── server.py      API REST FastAPI (chat, streaming SSE, confirmations)
+│   ├── security.py    clés API, limite de débit
+│   └── confirmations.py  actions risquées validées à distance
+├── client.py          client d'un serveur NEC (nec remote, future app Windows)
 ├── config/settings.py toute la configuration, lue depuis .env
 ├── app.py             assemblage : settings → LLM + outils → Agent
 └── cli.py             interface terminal
@@ -182,6 +187,8 @@ uv run nec ask "Quelles sont les dernières nouvelles concernant Microsoft ?"
 uv run nec tools        # liste des outils disponibles
 uv run nec -v           # affiche aussi les logs horodatés
 uv run nec --plain      # sans emoji (anciens terminaux)
+uv run nec serve        # API serveur (voir section 10)
+uv run nec remote       # client d'un serveur NEC distant
 ```
 
 `python -m nec_ai` fonctionne aussi.
@@ -261,14 +268,32 @@ Les permissions : `PermissionDecision.safe()`, `.confirm("raison")` (l'utilisate
 
 ## 10. Serveur API, client Windows, VPS
 
-Architecture cible (étapes 6 et 11) :
-
 ```
-Windows PC (client) ──HTTPS + clé API──► VPS : API NEC (FastAPI) ──► LLM / Web / Mémoire / Outils
-                    ◄── flux d'événements (SSE) : agent.thinking, tool.started, agent.final…
+PC Windows (nec remote) ──HTTPS + clé API──► VPS : API NEC ──► LLM / Web / Mémoire / Outils
+                        ◄── événements en direct : agent.thinking, tool.started, agent.final…
 ```
 
-Le cœur est déjà prêt pour ça. `Agent.run()` produit exactement les événements que l'API transmettra au client (`agent.started`, `agent.thinking`, `tool.started`, `tool.completed`, `confirmation.required`, `agent.final`, `agent.error`). Les commandes de lancement du serveur et le guide de déploiement VPS seront ajoutés à l'étape 6.
+En local, pour essayer :
+
+```powershell
+uv run nec new-key                 # génère une clé
+# dans .env : API_KEYS=<clé>  et  NEC_API_KEY=<la même clé>
+uv run nec serve                   # terminal 1 : le serveur (127.0.0.1:8000)
+uv run nec remote                  # terminal 2 : le client
+```
+
+| Méthode | Route | Rôle |
+|---|---|---|
+| GET | `/health` | état du serveur (sans clé) |
+| GET | `/v1/tools` | outils disponibles |
+| POST | `/v1/chat` | réponse finale + liste des événements |
+| POST | `/v1/chat/stream` | événements en direct (Server-Sent Events) |
+| POST | `/v1/confirmations/{id}` | autoriser ou refuser une action risquée |
+| DELETE | `/v1/sessions/{id}` | oublier une conversation |
+
+Le serveur refuse de démarrer sans clé. Chaque clé a sa limite de requêtes et ses propres conversations. Le client Python réutilisable est `nec_ai/client.py`, la base de la future application Windows.
+
+**Déploiement sur VPS (HTTPS, service systemd, Caddy, connexion depuis Windows) : [docs/deploy_vps.md](docs/deploy_vps.md).**
 
 ## 11. Sécurité
 
@@ -277,7 +302,7 @@ Le cœur est déjà prêt pour ça. `Agent.run()` produit exactement les événe
 - Réseau (`fetch_url`, navigateur) : http/https uniquement. Les endpoints de métadonnées cloud et les adresses privées sont bloqués, y compris après résolution DNS et à chaque redirection. La taille téléchargée est limitée.
 - Protection contre l'injection de prompt : le contenu externe est encadré par `<page_data>` et le prompt interdit d'y obéir.
 - Limites : nombre d'étapes (`MAX_AGENT_ITERATIONS`), timeouts LLM et outils, taille des sorties d'outils, appels identiques non répétés.
-- À venir avec l'API : authentification, rate limiting, écoute sur `127.0.0.1` par défaut.
+- API : clés obligatoires (comparées en temps constant, jamais journalisées), limite par clé, conversations isolées par clé, écoute sur `127.0.0.1` par défaut, en-têtes de sécurité, documentation interactive désactivée en production.
 
 ## 12. Tests
 
