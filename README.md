@@ -65,7 +65,8 @@ nec_ai/
 ├── llm/
 │   ├── base.py        interface LLMProvider, Message, ToolCall, retries
 │   ├── gemini.py      Google Gemini (défaut)
-│   ├── claude.py      Anthropic Claude
+│   ├── claude.py      Anthropic Claude (clé API)
+│   ├── claude_code.py Claude via le CLI Claude Code (abonnement, sans clé)
 │   ├── ollama.py      modèle local, sans clé
 │   ├── openai.py      OpenAI ou tout endpoint compatible
 │   ├── fake.py        LLM scripté pour les tests
@@ -138,7 +139,7 @@ Seule une clé LLM est obligatoire. Tout le reste a une valeur par défaut sûre
 
 | Variable | Rôle | Défaut |
 |---|---|---|
-| `LLM_PROVIDER` | `gemini`, `claude`, `openai` ou `ollama` (local, sans clé) | `gemini` |
+| `LLM_PROVIDER` | `gemini`, `claude`, `claude_code` (abonnement, sans clé), `openai` ou `ollama` (local, sans clé) | `gemini` |
 | `LLM_MODEL` | modèle précis (vide = défaut du fournisseur) | `gemini-flash-latest` / `claude-opus-5` / `gpt-4.1-mini` / `qwen3:8b` |
 | `GOOGLE_API_KEY` | clé Gemini ([aistudio.google.com](https://aistudio.google.com/apikey)) | — |
 | `ANTHROPIC_API_KEY` | clé Claude ([console.anthropic.com](https://console.anthropic.com)) | — |
@@ -149,6 +150,16 @@ Seule une clé LLM est obligatoire. Tout le reste a une valeur par défaut sûre
 | `SEARCH_API_KEY` | clé du fournisseur de recherche payant | — |
 | `LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR` | `INFO` |
 | `TRACE_ENABLED` | trace JSONL de chaque requête dans `data/traces/` | `true` |
+
+### Sans clé API : ton abonnement Claude via Claude Code (comme T3 Code)
+
+Si tu as un abonnement Claude (Pro ou Max) et Claude Code installé, par exemple parce que tu utilises T3 Code, NEC peut s'en servir directement, sans clé API.
+
+1. Vérifie que Claude Code marche : ouvre un terminal, tape `claude`, connecte-toi avec `/login` si demandé, puis quitte.
+2. Dans `.env` : `LLM_PROVIDER=claude_code` et `LLM_REQUESTS_PER_MINUTE=0`
+3. `uv run nec`
+
+Chaque étape de l'agent lance `claude -p` en mode sans outils : Claude décide, les outils de NEC exécutent, avec les permissions de NEC. Pour choisir le modèle : `LLM_MODEL=sonnet` ou `LLM_MODEL=opus`. La consommation compte dans les limites de ton abonnement. C'est prévu pour un usage personnel sur ta machine, comme T3 Code. Si `claude` n'est pas trouvé, indique son chemin complet dans `CLAUDE_CODE_PATH`.
 
 ### Sans clé API : modèle local avec Ollama
 

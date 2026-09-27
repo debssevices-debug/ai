@@ -33,12 +33,16 @@ class Settings(BaseSettings):
     )
 
     # ── LLM ──────────────────────────────────────────────────────────────
-    llm_provider: Literal["gemini", "claude", "openai", "ollama"] = "gemini"
+    llm_provider: Literal["gemini", "claude", "claude_code", "openai", "ollama"] = (
+        "gemini"
+    )
     llm_model: str = ""
     """Empty means the provider's default model."""
 
     google_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
+    claude_code_path: str = "claude"
+    """The Claude Code CLI used by LLM_PROVIDER=claude_code (subscription, no key)."""
     claude_fallbacks: bool = True
     """Let the API re-run a request that Claude's safety filter declines on its
     recommended fallback model (server-side, same call)."""
@@ -130,8 +134,11 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _local_models_are_slower(self) -> Settings:
         # A local model on a CPU can take minutes for one step; 60 s would cut it off.
-        if self.llm_provider == "ollama" and "llm_timeout" not in self.model_fields_set:
-            self.llm_timeout = 300.0
+        if "llm_timeout" not in self.model_fields_set:
+            if self.llm_provider == "ollama":
+                self.llm_timeout = 300.0
+            elif self.llm_provider == "claude_code":
+                self.llm_timeout = 180.0
         return self
 
     @property

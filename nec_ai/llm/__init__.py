@@ -39,6 +39,11 @@ def create_llm(settings: Settings) -> LLMProvider:
             fallbacks=settings.claude_fallbacks,
         )
 
+    if settings.llm_provider == "claude_code":
+        from nec_ai.llm.claude_code import ClaudeCodeProvider
+
+        return ClaudeCodeProvider(settings.llm_model, settings.claude_code_path)
+
     if settings.llm_provider == "openai":
         if settings.openai_api_key is None:
             raise LLMError("OPENAI_API_KEY is not set. Add it to your .env file.")
