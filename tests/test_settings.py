@@ -54,3 +54,9 @@ def test_filesystem_roots_default_to_home(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_log_level_is_normalised(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _settings(monkeypatch, LOG_LEVEL="debug").log_level == "DEBUG"
+
+
+def test_local_models_get_a_longer_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _settings(monkeypatch, LLM_PROVIDER="ollama").llm_timeout == 300
+    monkeypatch.setenv("LLM_TIMEOUT", "90")
+    assert Settings(_env_file=None, llm_provider="ollama").llm_timeout == 90

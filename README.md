@@ -136,7 +136,7 @@ Seule une clé LLM est obligatoire. Tout le reste a une valeur par défaut sûre
 
 | Variable | Rôle | Défaut |
 |---|---|---|
-| `LLM_PROVIDER` | `gemini` ou `openai` | `gemini` |
+| `LLM_PROVIDER` | `gemini`, `openai` ou `ollama` (local, sans clé) | `gemini` |
 | `LLM_MODEL` | modèle précis (vide = défaut du fournisseur) | `gemini-flash-latest` / `gpt-4.1-mini` |
 | `GOOGLE_API_KEY` | clé Gemini ([aistudio.google.com](https://aistudio.google.com/apikey)) | — |
 | `OPENAI_API_KEY` | clé OpenAI | — |
@@ -146,6 +146,17 @@ Seule une clé LLM est obligatoire. Tout le reste a une valeur par défaut sûre
 | `SEARCH_API_KEY` | clé du fournisseur de recherche payant | — |
 | `LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR` | `INFO` |
 | `TRACE_ENABLED` | trace JSONL de chaque requête dans `data/traces/` | `true` |
+
+### Sans clé API : modèle local avec Ollama
+
+L'agent peut utiliser un modèle qui tourne **sur ton PC** : gratuit, sans clé, sans quota, et rien ne sort de la machine.
+
+1. Installe Ollama : https://ollama.com/download (Windows : `winget install Ollama.Ollama`).
+2. Télécharge un modèle qui sait utiliser des outils (≈ 5 Go) : `ollama pull qwen3:8b`
+3. Dans `.env` : `LLM_PROVIDER=ollama` et `LLM_REQUESTS_PER_MINUTE=0`
+4. `uv run nec`
+
+Il faut environ 8 Go de RAM libre. Sans carte graphique, une étape peut prendre de 10 à 60 s. Sur un petit PC, prends `qwen3:4b` (plus rapide, moins bon) ; avec une bonne carte graphique, `qwen3:14b`. Un modèle local reste moins fort que Gemini ou GPT pour les recherches longues.
 
 La liste complète, commentée, se trouve dans [`.env.example`](.env.example). **Ne commitez jamais `.env`** : il est exclu par `.gitignore`.
 

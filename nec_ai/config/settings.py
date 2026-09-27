@@ -14,7 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 #: Repository root: ``nec_ai/config/settings.py`` -> three levels up. Anchored to
@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     )
 
     # ── LLM ──────────────────────────────────────────────────────────────
-    llm_provider: Literal["gemini", "openai"] = "gemini"
+    llm_provider: Literal["gemini", "openai", "ollama"] = "gemini"
     llm_model: str = ""
     """Empty means the provider's default model."""
 
@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr | None = None
     openai_base_url: str | None = None
     """Any OpenAI-compatible endpoint (OpenRouter, a local server, ...)."""
+
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_num_ctx: int = 16_384
+    """Context window for local models. Lower it if the PC runs out of memory."""
 
     llm_timeout: float = 60.0
     llm_max_retries: int = 3
@@ -117,6 +121,13 @@ class Settings(BaseSettings):
     @classmethod
     def _upper(cls, value: str) -> str:
         return value.strip().upper() or "INFO"
+
+    @model_validator(mode="after")
+    def _local_models_are_slower(self) -> Settings:
+        # A local model on a CPU can take minutes for one step; 60 s would cut it off.
+        if self.llm_provider == "ollama" and "llm_timeout" not in self.model_fields_set:
+            self.llm_timeout = 300.0
+        return self
 
     @property
     def traces_dir(self) -> Path:

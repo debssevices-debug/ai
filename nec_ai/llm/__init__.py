@@ -15,7 +15,10 @@ from nec_ai.llm.base import (
 
 
 def create_llm(settings: Settings) -> LLMProvider:
-    """Build the configured provider. Raises LLMError when its key is missing."""
+    """Build the configured provider. Raises LLMError when its key is missing.
+
+    ``ollama`` runs a model on this machine and needs no key at all.
+    """
     if settings.llm_provider == "gemini":
         if settings.google_api_key is None:
             raise LLMError("GOOGLE_API_KEY is not set. Add it to your .env file.")
@@ -34,6 +37,15 @@ def create_llm(settings: Settings) -> LLMProvider:
             settings.openai_api_key.get_secret_value(),
             settings.llm_model,
             base_url=settings.openai_base_url,
+        )
+
+    if settings.llm_provider == "ollama":
+        from nec_ai.llm.ollama import OllamaProvider
+
+        return OllamaProvider(
+            settings.llm_model,
+            base_url=settings.ollama_base_url,
+            num_ctx=settings.ollama_num_ctx,
         )
 
     raise LLMError(f"Unknown LLM_PROVIDER {settings.llm_provider!r}")

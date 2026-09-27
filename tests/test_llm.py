@@ -284,3 +284,92 @@ async def test_a_disabled_throttle_never_waits() -> None:
     throttle = RequestThrottle(per_minute=0)
     for _ in range(100):
         await throttle.acquire()
+
+
+# ── Ollama (local model, no key) ────────────────────────────────────────────
+
+
+def _ollama(handler):
+    import httpx
+
+    from nec_ai.llm.ollama import OllamaProvider
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return OllamaProvider("qwen3:8b", client=client)
+
+
+async def test_ollama_needs_no_key_and_parses_tool_calls() -> None:
+    import httpx
+
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "message": {
+                    "role": "assistant",
+                    "content": "<think>hmm</think>Je cherche.",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "web_search",
+                                "arguments": {"query": "q"},
+                            }
+                        }
+                    ],
+                },
+                "prompt_eval_count": 10,
+                "eval_count": 5,
+            },
+        )
+
+    result = await _ollama(handler).complete(_conversation(), [SPEC], temperature=0.2)
+    assert result.text == "Je cherche."
+    assert result.tool_calls[0].name == "web_search"
+    assert result.tool_calls[0].arguments == {"query": "q"}
+    assert sent["options"]["num_ctx"] == 16384
+    assert sent["stream"] is False
+    assert sent["tools"][0]["function"]["name"] == "web_search"
+    assert sent["messages"][3] == {
+        "role": "tool",
+        "content": "résultats",
+        "tool_name": "web_search",
+    }
+
+
+async def test_ollama_not_running_is_explained() -> None:
+    import httpx
+
+    def handler(request):
+        raise httpx.ConnectError("refused")
+
+    with pytest.raises(LLMError, match=r"ollama\.com"):
+        await _ollama(handler).complete([Message.user("hi")])
+
+
+async def test_ollama_missing_model_says_how_to_install_it() -> None:
+    import httpx
+
+    def handler(request):
+        return httpx.Response(404, json={"error": "model 'qwen3:8b' not found"})
+
+    with pytest.raises(LLMError, match="ollama pull qwen3:8b"):
+        await _ollama(handler).complete([Message.user("hi")])
+
+
+async def test_ollama_model_without_tools_is_explained() -> None:
+    import httpx
+
+    def handler(request):
+        return httpx.Response(400, json={"error": "gemma does not support tools"})
+
+    with pytest.raises(LLMError, match="outils"):
+        await _ollama(handler).complete([Message.user("hi")], [SPEC])
+
+
+def test_ollama_is_built_without_any_key() -> None:
+    llm = create_llm(Settings(_env_file=None, llm_provider="ollama"))
+    assert llm.name == "ollama"
+    assert llm.model == "qwen3:8b"
