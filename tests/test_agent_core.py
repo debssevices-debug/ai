@@ -249,3 +249,64 @@ async def test_an_empty_request_is_handled(request_text: str) -> None:
     events = await collect(make_agent(llm), request_text)
     assert events[-1].type is EventType.FINAL
     assert llm.calls == []
+
+
+async def test_a_quota_retry_is_streamed_as_a_waiting_event(monkeypatch) -> None:
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr("nec_ai.llm.base.asyncio.sleep", no_sleep)
+    llm = FakeLLM(
+        [
+            LLMUnavailableError("quota", retry_after=6.7, kind="rate_limit"),
+            LLMResponse(text="ok"),
+        ]
+    )
+    events = await collect(make_agent(llm, llm_max_retries=2), "x")
+    waiting = [e for e in events if e.type is EventType.WAITING]
+    assert waiting and waiting[0].data["reason"] == "rate_limit"
+    assert waiting[0].data["seconds"] == 7.2
+    assert events[-1].data["answer"] == "ok"
+
+
+async def test_a_quota_failure_explains_what_to_do() -> None:
+    llm = FakeLLM([LLMUnavailableError("429 limit 5", kind="rate_limit")])
+    events = await collect(make_agent(llm), "x")
+    answer = events[-1].data["answer"]
+    assert "quota" in answer
+    assert "LLM_REQUESTS_PER_MINUTE" in answer
+
+
+async def test_calls_from_one_turn_run_concurrently() -> None:
+    import asyncio
+
+    running = 0
+    peak = 0
+
+    class SlowRead(Tool):
+        name = "read"
+        description = "Read."
+
+        class Input(BaseModel):
+            url: str
+
+        async def run(self, args, ctx) -> ToolResult:
+            nonlocal running, peak
+            running += 1
+            peak = max(peak, running)
+            await asyncio.sleep(0.05)
+            running -= 1
+            return ToolResult.success(f"page {args.url}")
+
+    llm = FakeLLM(
+        [
+            LLMResponse(
+                tool_calls=[ToolCall("read", {"url": u}) for u in ("a", "b", "c")]
+            ),
+            LLMResponse(text="fin"),
+        ]
+    )
+    await collect(make_agent(llm, SlowRead()), "lis trois pages")
+    assert peak == 3
+    tool_messages = [m for m in llm.calls[-1].messages if m.role == "tool"]
+    assert [m.content for m in tool_messages] == ["page a", "page b", "page c"]

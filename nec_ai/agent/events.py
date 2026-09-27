@@ -16,6 +16,9 @@ class EventType(StrEnum):
     STARTED = "agent.started"
     THINKING = "agent.thinking"
     PLAN = "agent.plan"
+    WAITING = "agent.waiting"
+    """Paused before an LLM call: quota pacing, or a retry after an outage."""
+
     MESSAGE = "agent.message"
     """Text the model said while still working (e.g. announcing a search)."""
 

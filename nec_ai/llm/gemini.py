@@ -7,6 +7,7 @@ itself. The model proposes calls, the agent loop decides and executes them.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from google import genai
@@ -61,17 +62,57 @@ class GeminiProvider(LLMProvider):
                 model=self.model, contents=contents, config=config
             )
         except errors.APIError as exc:
-            code = getattr(exc, "code", None)
-            message = f"Gemini error {code}: {getattr(exc, 'message', exc)}"
-            if code in _RETRYABLE:
-                raise LLMUnavailableError(message) from exc
-            if code == 404:
-                message += f" (model {self.model!r} not found; set LLM_MODEL)"
-            raise LLMError(message) from exc
+            raise translate_error(exc, self.model) from exc
         except (OSError, TimeoutError) as exc:
             raise LLMUnavailableError(f"Gemini unreachable: {exc}") from exc
 
         return from_gemini_response(response)
+
+
+def translate_error(exc: errors.APIError, model: str) -> LLMError:
+    """Map a Gemini API error to LLMError / LLMUnavailableError, with retry delay."""
+    code = getattr(exc, "code", None)
+    raw = str(getattr(exc, "message", "") or exc)
+    logger.debug("Gemini error %s: %s", code, raw)
+    first_line = raw.strip().splitlines()[0] if raw.strip() else "unknown error"
+    message = f"Gemini error {code}: {first_line}"
+    if code == 429:
+        detail = _quota_detail(raw)
+        if detail:
+            message += f" ({detail})"
+        return LLMUnavailableError(
+            message, retry_after=retry_delay(exc), kind="rate_limit"
+        )
+    if code in _RETRYABLE:
+        return LLMUnavailableError(
+            message, retry_after=retry_delay(exc), kind="overloaded"
+        )
+    if code == 404:
+        message += f" (model {model!r} not found; set LLM_MODEL)"
+    return LLMError(message)
+
+
+def retry_delay(exc: errors.APIError) -> float | None:
+    """The wait Gemini asks for: RetryInfo.retryDelay, or 'retry in 6.6s' text."""
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict):
+        for item in (details.get("error") or {}).get("details") or []:
+            if isinstance(item, dict) and "RetryInfo" in str(item.get("@type", "")):
+                match = re.match(r"([\d.]+)s", str(item.get("retryDelay", "")))
+                if match:
+                    return float(match.group(1))
+    match = re.search(r"retry in ([\d.]+)\s*s", str(getattr(exc, "message", "")), re.I)
+    return float(match.group(1)) if match else None
+
+
+def _quota_detail(raw: str) -> str:
+    """Pull 'limit: 5' and the per-day / per-minute metric out of a 429 message."""
+    limit = re.search(r"limit:\s*(\d+)", raw)
+    if not limit:
+        return ""
+    per = "par jour" if "per_day" in raw or "PerDay" in raw else "par minute"
+    tier = "offre gratuite, " if "free_tier" in raw else ""
+    return f"{tier}limite {limit.group(1)} requêtes {per}"
 
 
 def to_declaration(spec: ToolSpec) -> types.FunctionDeclaration:

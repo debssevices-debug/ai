@@ -141,6 +141,7 @@ Seule une clé LLM est obligatoire. Tout le reste a une valeur par défaut sûre
 | `GOOGLE_API_KEY` | clé Gemini ([aistudio.google.com](https://aistudio.google.com/apikey)) | — |
 | `OPENAI_API_KEY` | clé OpenAI | — |
 | `MAX_AGENT_ITERATIONS` | étapes maximum par demande | `20` |
+| `LLM_REQUESTS_PER_MINUTE` | rythme max des appels au LLM (5 pour l'offre gratuite Gemini) | `0` (illimité) |
 | `SEARCH_PROVIDER` | `duckduckgo` (gratuit), `brave`, `serper` | `duckduckgo` |
 | `SEARCH_API_KEY` | clé du fournisseur de recherche payant | — |
 | `LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR` | `INFO` |
@@ -180,6 +181,15 @@ Exemples de demandes :
 - « Continue » (la conversation garde le contexte des échanges précédents)
 
 Pour chaque requête, une trace est écrite dans `data/traces/<date>/<id>.jsonl` (`USER_REQUEST → PLAN_CREATED → TOOL_SELECTED → TOOL_RESULT → FINAL_RESPONSE`). Elle permet de comprendre après coup pourquoi l'agent a fait telle action.
+
+### Dépannage
+
+| Message | Cause | Solution |
+|---|---|---|
+| `Gemini error 429 … free_tier … limit: 5` | Quota gratuit de Gemini : ~5 requêtes par minute. Chaque étape de l'agent consomme une requête. | Mettre `LLM_REQUESTS_PER_MINUTE=5` dans `.env` : l'agent patiente au lieu d'échouer. Pour aller plus vite, activer la facturation sur la clé (quelques centimes par recherche) ou essayer `LLM_MODEL=gemini-flash-lite-latest`. |
+| `Gemini error 503 … high demand` | Modèle surchargé chez Google (temporaire). | L'agent réessaie tout seul (2 s, 4 s, 8 s). Si ça persiste, changer `LLM_MODEL`. |
+| `GOOGLE_API_KEY is not set` | Clé absente du `.env`. | Ajouter la clé, voir [Configuration](#4-configuration-env). |
+| `model … not found` | Nom de modèle inconnu pour cette clé. | Corriger `LLM_MODEL` (ou le laisser vide). |
 
 ## 7. Ajouter un outil
 

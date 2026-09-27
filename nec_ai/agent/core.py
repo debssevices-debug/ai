@@ -34,8 +34,10 @@ from nec_ai.config.settings import Settings
 from nec_ai.llm.base import (
     LLMError,
     LLMProvider,
+    LLMResponse,
     LLMUnavailableError,
     Message,
+    RequestThrottle,
     ToolCall,
     complete_with_retry,
 )
@@ -68,8 +70,21 @@ INTERNAL_ERROR_ANSWER = (
 
 
 def llm_failure_answer(exc: Exception) -> str:
-    """What the user reads when the LLM fails: retry later, or fix the config."""
+    """What the user reads when the LLM fails: why, and what to do about it."""
     if isinstance(exc, LLMUnavailableError):
+        if exc.kind == "rate_limit":
+            return (
+                "Je n'ai pas pu terminer : le quota de l'API du modèle est atteint "
+                f"({exc}). Attends une minute avant de réessayer. Si ça se répète, "
+                "règle LLM_REQUESTS_PER_MINUTE dans le .env (5 pour l'offre gratuite "
+                "Gemini), passe sur un modèle moins demandé (LLM_MODEL) ou active la "
+                "facturation sur ta clé API."
+            )
+        if exc.kind == "overloaded":
+            return (
+                "Je n'ai pas pu terminer : le modèle est surchargé côté fournisseur "
+                f"({exc}). Réessaie dans un moment, ou change de modèle avec LLM_MODEL."
+            )
         return FALLBACK_ANSWER
     return (
         "Je n'ai pas pu traiter cette demande : le modèle de langage a renvoyé une "
@@ -97,6 +112,8 @@ class Agent:
         self.memory = memory or ConversationMemory(settings.history_max_messages)
         self.tracer = tracer
         self._prompt = prompt_builder or (lambda: system_prompt(voice=False))
+        # One throttle per agent: the quota is per API key, across requests.
+        self.throttle = RequestThrottle(settings.llm_requests_per_minute)
 
     # ── public API ──────────────────────────────────────────────────────
     async def run(
@@ -189,14 +206,7 @@ class Agent:
             logger.info("AGENT reasoning (step %d)", iteration)
 
             try:
-                response = await complete_with_retry(
-                    self.llm,
-                    messages,
-                    specs or None,
-                    timeout=self.settings.llm_timeout,
-                    retries=self.settings.llm_max_retries,
-                    temperature=self.settings.llm_temperature,
-                )
+                response = await self._complete(messages, specs or None, emit)
             except LLMError as exc:
                 logger.error("AGENT LLM failure: %s", exc)
                 emit(EventType.ERROR, error=str(exc), stage="llm")
@@ -217,10 +227,18 @@ class Agent:
                 emit(EventType.MESSAGE, text=response.text)
             messages.append(response.as_message(self.llm.name))
 
-            for call in response.tool_calls:
-                content = await self._run_tool(
-                    call, ctx, confirm_with_events, emit, seen_calls, tools_used
+            # Independent calls from the same turn run concurrently (reading
+            # four pages takes as long as the slowest one). Results go back to
+            # the model in the order it asked for them.
+            contents = await asyncio.gather(
+                *(
+                    self._run_tool(
+                        call, ctx, confirm_with_events, emit, seen_calls, tools_used
+                    )
+                    for call in response.tool_calls
                 )
+            )
+            for call, content in zip(response.tool_calls, contents, strict=True):
                 messages.append(Message.tool_result(call, content))
 
         # Iteration budget spent: one last turn without tools to get an answer.
@@ -232,13 +250,7 @@ class Agent:
         )
         messages.append(Message.user(LIMIT_NOTICE))
         try:
-            response = await complete_with_retry(
-                self.llm,
-                messages,
-                None,
-                timeout=self.settings.llm_timeout,
-                retries=self.settings.llm_max_retries,
-            )
+            response = await self._complete(messages, None, emit)
             answer = response.text or FALLBACK_ANSWER
         except LLMError as exc:
             emit(EventType.ERROR, error=str(exc), stage="llm")
@@ -251,6 +263,38 @@ class Agent:
             emit,
             self.settings.max_agent_iterations,
             limit_reached=True,
+        )
+
+    async def _complete(
+        self, messages: list[Message], specs: list | None, emit: Callable[..., None]
+    ) -> LLMResponse:
+        """One LLM turn with pacing and retries; waits are streamed as events."""
+
+        def on_retry(error: LLMUnavailableError, delay: float, attempt: int) -> None:
+            emit(
+                EventType.WAITING,
+                reason=error.kind,
+                seconds=round(delay, 1),
+                attempt=attempt,
+                detail=str(error),
+            )
+
+        def on_throttle(delay: float) -> None:
+            emit(
+                EventType.WAITING, reason="throttle", seconds=round(delay, 1), attempt=0
+            )
+
+        return await complete_with_retry(
+            self.llm,
+            messages,
+            specs,
+            timeout=self.settings.llm_timeout,
+            retries=self.settings.llm_max_retries,
+            temperature=self.settings.llm_temperature,
+            max_wait=self.settings.llm_max_retry_wait,
+            throttle=self.throttle,
+            on_retry=on_retry,
+            on_throttle=on_throttle,
         )
 
     async def _run_tool(
@@ -313,7 +357,14 @@ class Agent:
     ) -> ConfirmationHandler:
         """Wrap the caller's handler so every confirmation is also an event."""
 
+        # Tools may run concurrently, but the user answers one question at a time.
+        lock = asyncio.Lock()
+
         async def bridge(request: ConfirmationRequest) -> bool:
+            async with lock:
+                return await ask(request)
+
+        async def ask(request: ConfirmationRequest) -> bool:
             emit(
                 EventType.CONFIRMATION_REQUIRED,
                 id=request.id,

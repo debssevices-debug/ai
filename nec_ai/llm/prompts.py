@@ -25,7 +25,12 @@ METHOD = """\
    autre recherche, autre source, ou réponse finale.
 4. Si une recherche ne donne rien d'utile, reformule la requête ou essaie une autre
    source avant d'abandonner.
-5. Quand tu as assez d'éléments, arrête d'appeler des outils et réponds."""
+5. Quand plusieurs actions sont indépendantes (plusieurs recherches, plusieurs
+   pages à lire), demande-les TOUTES dans le même tour : c'est plus rapide et
+   ça économise le quota du modèle.
+6. Ne relis pas une page déjà lue. Si une page est vide ou inutile, passe à une
+   autre source.
+7. Quand tu as assez d'éléments, arrête d'appeler des outils et réponds."""
 
 WEB = """\
 # INTERNET

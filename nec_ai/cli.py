@@ -54,6 +54,8 @@ class EventPrinter:
             )
             title = "Plan révisé" if d.get("revised") else "Plan"
             return self._icon("📋", "[plan]") + f" {title} :\n{steps}"
+        if t is EventType.WAITING:
+            return self._icon("⏳", "[wait]") + " " + self._waiting(d)
         if t is EventType.MESSAGE:
             return self._icon("💬", "[msg]") + f" {d.get('text', '')}"
         if t is EventType.TOOL_STARTED:
@@ -72,6 +74,18 @@ class EventPrinter:
             return self._icon("❌", "[x]") + f" {d.get('error')}"
         return None
 
+    @staticmethod
+    def _waiting(d: dict[str, Any]) -> str:
+        seconds = f"{d.get('seconds', 0):.0f} s"
+        reason = d.get("reason")
+        if reason == "throttle":
+            return f"Pause de {seconds} pour rester sous le quota du modèle..."
+        if reason == "rate_limit":
+            return f"Quota du modèle atteint, nouvel essai dans {seconds}..."
+        if reason == "overloaded":
+            return f"Modèle surchargé, nouvel essai dans {seconds}..."
+        return f"Modèle indisponible, nouvel essai dans {seconds}..."
+
     def _tool_line(self, tool: str, args: dict[str, Any]) -> str | None:
         if tool == "update_plan":
             return None
@@ -81,9 +95,20 @@ class EventPrinter:
                 + f" Recherche web : « {args.get('query', '')} »"
             )
         if tool == "fetch_url":
-            host = urlsplit(str(args.get("url", ""))).hostname or args.get("url")
-            return self._icon("🌐", "[web]") + f" Consultation de {host}"
+            return self._icon("🌐", "[web]") + f" Consultation de {_short_url(args)}"
         return self._icon("🛠️", "[tool]") + f" {tool}"
+
+
+def _short_url(args: dict[str, Any]) -> str:
+    """``www.apple.com/fr/iphone-18-pro`` rather than just the host."""
+    url = str(args.get("url", ""))
+    parts = urlsplit(url)
+    if not parts.hostname:
+        return url
+    path = parts.path.rstrip("/")
+    text = parts.hostname + (path if len(path) <= 50 else path[:47] + "...")
+    start = args.get("start")
+    return text + (f" (suite, à partir de {start})" if start else "")
 
 
 async def ask_confirmation(request: ConfirmationRequest) -> bool:

@@ -153,3 +153,134 @@ def test_providers_are_built_from_settings() -> None:
 
 async def _no_sleep(_: float) -> None:
     return None
+
+
+# ── quota / overload handling (the free-tier scenario) ─────────────────────
+
+REAL_429 = (
+    "You exceeded your current quota, please check your plan and billing details.\n"
+    "* Quota exceeded for metric: generativelanguage.googleapis.com/"
+    "generate_content_free_tier_requests, limit: 5, model: gemini-3.8-flash\n"
+    "Please retry in 6.667964504s."
+)
+
+
+def test_a_gemini_quota_error_carries_its_retry_delay() -> None:
+    from nec_ai.llm.gemini import translate_error
+
+    error = translate_error(
+        errors.APIError(429, {"error": {"code": 429, "message": REAL_429}}), "m"
+    )
+    assert isinstance(error, LLMUnavailableError)
+    assert error.kind == "rate_limit"
+    assert error.retry_after == pytest.approx(6.667964504)
+    assert "limite 5 requêtes par minute" in str(error)
+    assert "\n" not in str(error)
+
+
+def test_retry_info_details_are_preferred() -> None:
+    from nec_ai.llm.gemini import retry_delay
+
+    exc = errors.APIError(
+        429,
+        {
+            "error": {
+                "message": "quota",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                        "retryDelay": "12s",
+                    }
+                ],
+            }
+        },
+    )
+    assert retry_delay(exc) == 12.0
+
+
+def test_an_overloaded_model_is_retryable() -> None:
+    from nec_ai.llm.gemini import translate_error
+
+    error = translate_error(
+        errors.APIError(503, {"error": {"message": "high demand"}}), "m"
+    )
+    assert isinstance(error, LLMUnavailableError)
+    assert error.kind == "overloaded"
+
+
+async def test_retry_waits_as_long_as_the_provider_asks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waits: list[float] = []
+
+    async def record(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr("nec_ai.llm.base.asyncio.sleep", record)
+    llm = FakeLLM(
+        [
+            LLMUnavailableError("quota", retry_after=6.7, kind="rate_limit"),
+            LLMResponse(text="ok"),
+        ]
+    )
+    seen = []
+    result = await complete_with_retry(
+        llm, [Message.user("hi")], on_retry=lambda e, d, a: seen.append((e.kind, d, a))
+    )
+    assert result.text == "ok"
+    assert waits == [pytest.approx(7.2)]
+    assert seen == [("rate_limit", pytest.approx(7.2), 1)]
+
+
+async def test_backoff_grows_when_no_delay_is_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waits: list[float] = []
+
+    async def record(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr("nec_ai.llm.base.asyncio.sleep", record)
+    llm = FakeLLM([LLMUnavailableError("503")] * 3 + [LLMResponse(text="ok")])
+    await complete_with_retry(llm, [Message.user("hi")], retries=3)
+    assert waits == [2.0, 4.0, 8.0]
+
+
+async def test_a_long_quota_wait_fails_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("nec_ai.llm.base.asyncio.sleep", _no_sleep)
+    llm = FakeLLM(
+        [LLMUnavailableError("daily quota", retry_after=3600, kind="rate_limit")]
+    )
+    with pytest.raises(LLMUnavailableError):
+        await complete_with_retry(llm, [Message.user("hi")], max_wait=60)
+    assert len(llm.calls) == 1
+
+
+async def test_the_throttle_spaces_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    from nec_ai.llm.base import RequestThrottle
+
+    clock = [1000.0]
+    waits: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        waits.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr("nec_ai.llm.base.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("nec_ai.llm.base.asyncio.sleep", fake_sleep)
+    throttle = RequestThrottle(per_minute=2)
+    notified: list[float] = []
+    for _ in range(3):
+        await throttle.acquire(notified.append)
+        clock[0] += 1
+    assert len(waits) == 1
+    assert waits[0] == pytest.approx(58.2)
+    assert notified == waits
+
+
+async def test_a_disabled_throttle_never_waits() -> None:
+    from nec_ai.llm.base import RequestThrottle
+
+    throttle = RequestThrottle(per_minute=0)
+    for _ in range(100):
+        await throttle.acquire()

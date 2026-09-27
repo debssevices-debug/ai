@@ -43,7 +43,12 @@ class Settings(BaseSettings):
     """Any OpenAI-compatible endpoint (OpenRouter, a local server, ...)."""
 
     llm_timeout: float = 60.0
-    llm_max_retries: int = 2
+    llm_max_retries: int = 3
+    llm_max_retry_wait: float = 60.0
+    """Longest wait accepted before a retry (e.g. a quota reset). Beyond it, fail."""
+
+    llm_requests_per_minute: int = 0
+    """Client-side pacing. 0 = no limit. Gemini free tier: set 5 (or 10 for Lite)."""
     llm_temperature: float = 0.3
 
     # ── Agent ────────────────────────────────────────────────────────────

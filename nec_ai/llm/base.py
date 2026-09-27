@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from abc import ABC, abstractmethod
+from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -87,6 +90,55 @@ class LLMError(Exception):
 class LLMUnavailableError(LLMError):
     """Transient failure: timeout, rate limit, 5xx. Worth retrying."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after: float | None = None,
+        kind: str = "unavailable",
+    ) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+        """Seconds the provider asked us to wait, when it said so."""
+
+        self.kind = kind
+        """``rate_limit`` (quota), ``overloaded`` (5xx), ``timeout`` or ``unavailable``."""
+
+
+class RequestThrottle:
+    """Keeps requests under N per minute, so a free-tier quota is never hit.
+
+    Waiting a few seconds before a request is much better than a 429: some
+    providers count rejected requests against the quota too.
+    """
+
+    def __init__(self, per_minute: int) -> None:
+        self.per_minute = per_minute
+        self._sent: deque[float] = deque()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, on_wait: Callable[[float], None] | None = None) -> None:
+        if self.per_minute <= 0:
+            return
+        async with self._lock:
+            now = time.monotonic()
+            while self._sent and now - self._sent[0] >= 60:
+                self._sent.popleft()
+            if len(self._sent) >= self.per_minute:
+                wait = 60 - (now - self._sent[0]) + 0.2
+                if on_wait is not None:
+                    on_wait(wait)
+                logger.info(
+                    "LLM throttle: waiting %.1fs (limit %d/min)", wait, self.per_minute
+                )
+                await asyncio.sleep(wait)
+                self._sent.popleft()
+            self._sent.append(time.monotonic())
+
+
+#: Called before each retry with (error, seconds to wait, attempt number).
+RetryCallback = Callable[[LLMUnavailableError, float, int], None]
+
 
 class LLMProvider(ABC):
     name: str = "llm"
@@ -114,28 +166,47 @@ async def complete_with_retry(
     tools: list[ToolSpec] | None = None,
     *,
     timeout: float = 60.0,
-    retries: int = 2,
+    retries: int = 3,
     temperature: float | None = None,
+    max_wait: float = 60.0,
+    throttle: RequestThrottle | None = None,
+    on_retry: RetryCallback | None = None,
+    on_throttle: Callable[[float], None] | None = None,
 ) -> LLMResponse:
-    """Call the model with a timeout and exponential backoff on transient errors."""
+    """Call the model with a timeout, retrying transient errors.
+
+    The wait before a retry is what the provider asked for (``retry_after``,
+    e.g. a quota reset in 7 s) or else an exponential backoff (2, 4, 8 s...).
+    When the provider asks for longer than ``max_wait`` (a daily quota), the
+    error is raised at once rather than blocking the user for minutes.
+    """
     attempt = 0
     while True:
+        if throttle is not None:
+            await throttle.acquire(on_throttle)
         try:
             return await asyncio.wait_for(
                 provider.complete(messages, tools, temperature=temperature),
                 timeout=timeout,
             )
         except TimeoutError:
-            error: LLMError = LLMUnavailableError(
-                f"the model did not answer within {timeout:g}s"
+            error = LLMUnavailableError(
+                f"the model did not answer within {timeout:g}s", kind="timeout"
             )
         except LLMUnavailableError as exc:
             error = exc
         if attempt >= retries:
             raise error
-        delay = 2**attempt
+        if error.retry_after is not None:
+            delay = error.retry_after + 0.5
+        else:
+            delay = min(2.0 * 2**attempt, 30.0)
+        if delay > max_wait:
+            raise error
         attempt += 1
         logger.warning(
-            "LLM unavailable (%s); retry %d/%d in %ds", error, attempt, retries, delay
+            "LLM unavailable (%s); retry %d/%d in %.0fs", error, attempt, retries, delay
         )
+        if on_retry is not None:
+            on_retry(error, delay, attempt)
         await asyncio.sleep(delay)
