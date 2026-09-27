@@ -95,7 +95,7 @@ def to_gemini_contents(messages: list[Message]) -> tuple[str, list[types.Content
         if message.role == "tool":
             part = types.Part(
                 function_response=types.FunctionResponse(
-                    id=message.tool_call_id,
+                    id=_provider_id(message.tool_call_id),
                     name=message.name or "tool",
                     response={"result": message.content},
                 )
@@ -122,7 +122,9 @@ def to_gemini_contents(messages: list[Message]) -> tuple[str, list[types.Content
                 parts.append(
                     types.Part(
                         function_call=types.FunctionCall(
-                            id=call.id, name=call.name, args=call.arguments
+                            id=_provider_id(call.id),
+                            name=call.name,
+                            args=call.arguments,
                         )
                     )
                 )
@@ -136,6 +138,13 @@ def to_gemini_contents(messages: list[Message]) -> tuple[str, list[types.Content
         )
 
     return "\n\n".join(p for p in system_parts if p), contents
+
+
+def _provider_id(call_id: str | None) -> str | None:
+    """Gemini ids go back as-is; ids we generated locally (``call_...``) do not."""
+    if call_id and not call_id.startswith("call_"):
+        return call_id
+    return None
 
 
 def _is_function_turn(content: types.Content) -> bool:
